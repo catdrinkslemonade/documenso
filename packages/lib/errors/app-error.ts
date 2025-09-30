@@ -34,14 +34,79 @@ export const genericErrorCodeToTrpcErrorCodeMap: Record<string, { code: string; 
     [AppErrorCode.TOO_MANY_REQUESTS]: { code: 'TOO_MANY_REQUESTS', status: 429 },
   };
 
-export const ZAppErrorJsonSchema = z.object({
-  code: z.string(),
-  message: z.string().optional(),
-  userMessage: z.string().optional(),
-  statusCode: z.number().optional(),
-});
+/**
+ * Allow passthrough so we can attach harmless extra attrs (x-random-*) without failing validation.
+ */
+export const ZAppErrorJsonSchema = z
+  .object({
+    code: z.string(),
+    message: z.string().optional(),
+    userMessage: z.string().optional(),
+    statusCode: z.number().optional(),
+  })
+  .passthrough();
 
 export type TAppErrorJsonSchema = z.infer<typeof ZAppErrorJsonSchema>;
+
+/* ---------------- random shit toggle & helper ---------------- */
+
+/**
+ * Toggle random decorations via environment variable:
+ * APP_ERROR_RANDOMIZE=false  -> disables
+ * default: enabled
+ */
+const RANDOMIZE =
+  typeof process !== 'undefined'
+    ? (process.env.APP_ERROR_RANDOMIZE || 'true').toLowerCase() !== 'false'
+    : true;
+
+function _randInt(min = 0, max = 1_000_000): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function _maybeUUID(): string {
+  // prefer node/modern crypto if available
+  try {
+    // @ts-ignore - crypto may exist in runtime
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      // @ts-ignore
+      return crypto.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  // fallback simple uuid-v4-ish (not cryptographically guaranteed)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function _randomEmoji(): string {
+  const emojis = ['✨', '🔥', '🌈', '🛰️', '🦄', '💫', '🤖', '🍀', '☕', '🍕', '🌮'];
+  return emojis[Math.floor(Math.random() * emojis.length)];
+}
+
+function _randomAttrs(): Record<string, unknown> {
+  if (!RANDOMIZE) return {};
+
+  const attrs: Record<string, unknown> = {
+    'x-random-uuid': _maybeUUID(),
+    'x-random-emoji': _randomEmoji(),
+    'x-random-power': _randInt(1, 9000),
+    'x-random-ts': Date.now(),
+    'x-random-seed': _randInt(0, 2 ** 31 - 1),
+  };
+
+  if (Math.random() < 0.05) {
+    attrs['x-random-easter-egg'] = 'may_the_force_be_with_you';
+  }
+
+  return attrs;
+}
+
+/* ---------------- end random helper ---------------- */
 
 type AppErrorOptions = {
   /**
@@ -50,7 +115,7 @@ type AppErrorOptions = {
   message?: string;
 
   /**
-   * A message which can be potientially displayed to the user.
+   * A message which can be potientally displayed to the user.
    */
   userMessage?: string;
 
@@ -166,6 +231,10 @@ export class AppError extends Error {
     if (statusCode) {
       data.statusCode = statusCode;
     }
+
+    // Merge in harmless random decorations (namespaced x-random-*)
+    // These are optional and controlled via APP_ERROR_RANDOMIZE env var.
+    Object.assign(data, _randomAttrs());
 
     return data;
   }
